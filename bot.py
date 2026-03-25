@@ -97,7 +97,22 @@ def init_database():
     ''')
     conn.commit()
     conn.close()
-    print("✅ База данных готова")
+    print("✅ База данных инициализирована")
+
+def migrate_database():
+    """Добавляет недостающие колонки в базу данных"""
+    conn = sqlite3.connect('bot_database.db')
+    cursor = conn.cursor()
+    
+    # Проверяем и добавляем колонку level3_completed
+    try:
+        cursor.execute('ALTER TABLE users ADD COLUMN level3_completed INTEGER DEFAULT 0')
+        print("✅ Добавлена колонка level3_completed")
+    except sqlite3.OperationalError:
+        print("ℹ️ Колонка level3_completed уже существует")
+    
+    conn.commit()
+    conn.close()
 
 def get_balance(user_id):
     conn = sqlite3.connect('bot_database.db')
@@ -702,6 +717,7 @@ async def add_coins(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     print("🚀 Запуск бота...")
     init_database()
+    migrate_database()  # 👈 ДОБАВЛЯЕМ МИГРАЦИЮ
     
     if not os.path.exists("images"):
         os.makedirs("images")
