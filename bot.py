@@ -14,10 +14,11 @@ logging.basicConfig(
     level=logging.INFO
 )
 
+# 👇 ТОКЕН ИЗ ПЕРЕМЕННОЙ ОКРУЖЕНИЯ
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 
 if not BOT_TOKEN:
-    raise ValueError("❌ BOT_TOKEN не найден!")
+    raise ValueError("❌ BOT_TOKEN не найден! Добавь переменную окружения BOT_TOKEN")
 
 request = HTTPXRequest()
 
@@ -55,6 +56,12 @@ MEDIUM_QUESTIONS = [
     {"question": "Кто был главным тренером до Тимура Касимова?", "options": ["Игорь Меньщиков", "Горан Алексич", "Сергей Попков"], "correct": "Сергей Попков"},
 ]
 
+HARD_QUESTIONS = [
+    {"question": "Назови бывший клуб Владлена Бабаева.", "options": ["Сокол Саратов", "Чайка Песчанокопское", "Ленинградец"], "correct": "Сокол Саратов"},
+    {"question": "Самый дорогой игрок в составе?", "options": ["Виталий Шитов", "Даниил Камлашев", "Никита Янович"], "correct": "Никита Янович"},
+    {"question": "Сколько арендованных игроков в составе «Тюмень»?", "options": ["1", "2", "3"], "correct": "3"},
+]
+
 # ========== ЛОКАЛЬНЫЕ ФОТО ==========
 def get_player_image_path(player_name):
     images = {
@@ -84,6 +91,7 @@ def init_database():
             correct_answers INTEGER DEFAULT 0,
             level1_completed INTEGER DEFAULT 0,
             level2_completed INTEGER DEFAULT 0,
+            level3_completed INTEGER DEFAULT 0,
             inventory TEXT DEFAULT '{}'
         )
     ''')
@@ -112,7 +120,7 @@ def add_user(user_id, username, first_name):
     cursor.execute('SELECT user_id FROM users WHERE user_id = ?', (user_id,))
     exists = cursor.fetchone()
     if not exists:
-        cursor.execute('INSERT INTO users (user_id, username, first_name, balance, total_answers, correct_answers, level1_completed, level2_completed, inventory) VALUES (?, ?, ?, 0, 0, 0, 0, 0, ?)', 
+        cursor.execute('INSERT INTO users (user_id, username, first_name, balance, total_answers, correct_answers, level1_completed, level2_completed, level3_completed, inventory) VALUES (?, ?, ?, 0, 0, 0, 0, 0, 0, ?)', 
                       (user_id, username, first_name, json.dumps({})))
         conn.commit()
         print(f"✅ Новый пользователь добавлен: {user_id}")
@@ -144,8 +152,10 @@ def get_level_completed(user_id, level):
     cursor = conn.cursor()
     if level == 1:
         cursor.execute('SELECT level1_completed FROM users WHERE user_id = ?', (user_id,))
-    else:
+    elif level == 2:
         cursor.execute('SELECT level2_completed FROM users WHERE user_id = ?', (user_id,))
+    else:
+        cursor.execute('SELECT level3_completed FROM users WHERE user_id = ?', (user_id,))
     result = cursor.fetchone()
     conn.close()
     return result[0] if result else 0
@@ -155,33 +165,30 @@ def set_level_completed(user_id, level):
     cursor = conn.cursor()
     if level == 1:
         cursor.execute('UPDATE users SET level1_completed = 1 WHERE user_id = ?', (user_id,))
-    else:
+    elif level == 2:
         cursor.execute('UPDATE users SET level2_completed = 1 WHERE user_id = ?', (user_id,))
+    else:
+        cursor.execute('UPDATE users SET level3_completed = 1 WHERE user_id = ?', (user_id,))
     conn.commit()
     conn.close()
     print(f"✅ Уровень {level} отмечен как пройденный для {user_id}")
 
 def get_inventory(user_id):
-    """Получает инвентарь пользователя в виде словаря"""
     conn = sqlite3.connect('bot_database.db')
     cursor = conn.cursor()
     cursor.execute('SELECT inventory FROM users WHERE user_id = ?', (user_id,))
     result = cursor.fetchone()
     conn.close()
-    
     if result and result[0]:
         return json.loads(result[0])
     return {}
 
 def update_inventory(user_id, item_name):
-    """Добавляет предмет в инвентарь"""
     inventory = get_inventory(user_id)
-    
     if item_name in inventory:
         inventory[item_name] += 1
     else:
         inventory[item_name] = 1
-    
     conn = sqlite3.connect('bot_database.db')
     cursor = conn.cursor()
     cursor.execute('UPDATE users SET inventory = ? WHERE user_id = ?', (json.dumps(inventory), user_id))
@@ -270,48 +277,36 @@ async def handle_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ========== ИНВЕНТАРЬ ==========
 async def show_inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает инвентарь пользователя"""
     query = update.callback_query
     await query.answer()
-    
     user_id = query.from_user.id
     inventory = get_inventory(user_id)
     
     if not inventory:
         await query.message.reply_text(
-            "🧰 *Ваш инвентарь пуст*\n\n"
-            "Открывайте кейсы, чтобы получить футболистов!",
+            "🧰 *Ваш инвентарь пуст*\n\nОткрывайте кейсы, чтобы получить футболистов!",
             parse_mode="Markdown"
         )
         return
     
-    # Формируем список предметов
     items_list = ""
     for item_name, count in sorted(inventory.items()):
         items_list += f"• {item_name}: {count} шт\n"
     
-    # Подсчитываем общее количество
     total_items = sum(inventory.values())
     
     await query.message.reply_text(
-        f"🧰 *Ваш инвентарь*\n\n"
-        f"📦 Всего предметов: {total_items}\n\n"
-        f"{items_list}",
+        f"🧰 *Ваш инвентарь*\n\n📦 Всего предметов: {total_items}\n\n{items_list}",
         parse_mode="Markdown"
     )
 
 # ========== ПРЕДЛОЖЕНИЯ ==========
 async def suggestions_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Открывает меню предложений"""
     query = update.callback_query
     user_id = query.from_user.id
     print(f"🔍 Пользователь {user_id} нажал кнопку Предложения")
-    
     await query.answer()
-    
     context.user_data['waiting_for_suggestion'] = True
-    print(f"✅ Для пользователя {user_id} установлен режим ожидания предложения")
-    
     await query.message.reply_text(
         "📝 Предложения и вопросы\n\n"
         "Здесь вы можете предложить идеи по боту, а также написать вопрос, "
@@ -321,7 +316,6 @@ async def suggestions_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def handle_suggestion(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обрабатывает отправленное предложение"""
     user = update.effective_user
     user_id = user.id
     username = user.username if user.username else "нет username"
@@ -332,28 +326,17 @@ async def handle_suggestion(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return False
     
     context.user_data['waiting_for_suggestion'] = False
-    
     ADMIN_ID = 2120093748
     
     admin_text = f"📬 НОВОЕ ПРЕДЛОЖЕНИЕ!\n\nОт: {first_name} (@{username})\nID: {user_id}\n\nТекст:\n{text}"
     
     try:
-        await context.bot.send_message(
-            chat_id=ADMIN_ID,
-            text=admin_text
-        )
-        await context.bot.forward_message(
-            chat_id=ADMIN_ID,
-            from_chat_id=user_id,
-            message_id=update.message.message_id
-        )
+        await context.bot.send_message(chat_id=ADMIN_ID, text=admin_text)
+        await context.bot.forward_message(chat_id=ADMIN_ID, from_chat_id=user_id, message_id=update.message.message_id)
     except Exception as e:
         print(f"❌ Ошибка при отправке админу: {e}")
     
-    await update.message.reply_text(
-        "✅ Спасибо что написал!\n\nЖди когда администратор прочитает это сообщение."
-    )
-    
+    await update.message.reply_text("✅ Спасибо что написал!\n\nЖди когда администратор прочитает это сообщение.")
     return True
 
 # ========== КЕЙСЫ ==========
@@ -418,8 +401,6 @@ async def handle_case(update: Update, context: ContextTypes.DEFAULT_TYPE):
     new_balance = balance - price
     update_balance(user_id, new_balance)
     item_name = get_random_item(case_type)
-    
-    # Добавляем в инвентарь
     update_inventory(user_id, item_name)
     
     image_path = get_player_image_path(item_name)
@@ -451,6 +432,7 @@ async def quiz_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     level1_completed = get_level_completed(user_id, 1)
     level2_completed = get_level_completed(user_id, 2)
+    level3_completed = get_level_completed(user_id, 3)
     
     buttons = []
     
@@ -464,15 +446,17 @@ async def quiz_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         buttons.append([InlineKeyboardButton("2️⃣ Уровень 2", callback_data="quiz_medium")])
     
+    if level3_completed == 1:
+        buttons.append([InlineKeyboardButton("3️⃣ Уровень 3 ✅ (пройден)", callback_data="quiz_already_completed")])
+    else:
+        buttons.append([InlineKeyboardButton("3️⃣ Уровень 3", callback_data="quiz_hard")])
+    
     buttons.append([InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")])
     
     keyboard = InlineKeyboardMarkup(buttons)
     
     await update.message.reply_text(
-        "❓ *Викторина*\n\n"
-        "👇 *Выбери уровень.*\n"
-        "Пройдешь викторину — получишь +0.1 coin!\n\n"
-        "⚠️ *Каждый уровень можно пройти только один раз!*",
+        "❓ *Викторина*\n\n👇 *Выбери уровень.*\nПройдешь викторину — получишь +0.1 coin!\n\n⚠️ *Каждый уровень можно пройти только один раз!*",
         parse_mode="Markdown",
         reply_markup=keyboard
     )
@@ -506,6 +490,17 @@ async def start_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['quiz_difficulty'] = "medium"
         context.user_data['quiz_level'] = 2
         await ask_question(query, context)
+    elif difficulty == "hard":
+        if get_level_completed(user_id, 3) == 1:
+            await query.message.edit_text("❌ *Ты уже прошел Уровень 3!*", parse_mode="Markdown")
+            return
+        questions = HARD_QUESTIONS.copy()
+        random.shuffle(questions)
+        context.user_data['quiz_questions'] = questions
+        context.user_data['quiz_index'] = 0
+        context.user_data['quiz_difficulty'] = "hard"
+        context.user_data['quiz_level'] = 3
+        await ask_question(query, context)
 
 async def ask_question(query, context):
     questions = context.user_data.get('quiz_questions', [])
@@ -523,13 +518,10 @@ async def ask_question(query, context):
         new_balance = current_balance + 0.1
         update_balance(user_id, new_balance)
         
-        difficulty_name = "Уровень 1" if level == 1 else "Уровень 2"
+        difficulty_name = f"Уровень {level}"
         
         await query.message.edit_text(
-            f"🎉 *Поздравляю!*\n\n"
-            f"Ты прошел {difficulty_name}!\n"
-            f"💰 +0.1 coin\n"
-            f"💰 Новый баланс: {new_balance:.2f} coins",
+            f"🎉 *Поздравляю!*\n\nТы прошел {difficulty_name}!\n💰 +0.1 coin\n💰 Новый баланс: {new_balance:.2f} coins",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 В главное меню", callback_data="back_to_menu")]])
         )
@@ -575,8 +567,10 @@ async def handle_quiz_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
         difficulty = context.user_data.get('quiz_difficulty', 'easy')
         if difficulty == 'easy':
             new_questions = EASY_QUESTIONS.copy()
-        else:
+        elif difficulty == 'medium':
             new_questions = MEDIUM_QUESTIONS.copy()
+        else:
+            new_questions = HARD_QUESTIONS.copy()
         
         random.shuffle(new_questions)
         context.user_data['quiz_questions'] = new_questions
@@ -616,6 +610,7 @@ async def handle_back_to_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE
     user_id = query.from_user.id
     level1_completed = get_level_completed(user_id, 1)
     level2_completed = get_level_completed(user_id, 2)
+    level3_completed = get_level_completed(user_id, 3)
     
     buttons = []
     
@@ -628,6 +623,11 @@ async def handle_back_to_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE
         buttons.append([InlineKeyboardButton("2️⃣ Уровень 2 ✅ (пройден)", callback_data="quiz_already_completed")])
     else:
         buttons.append([InlineKeyboardButton("2️⃣ Уровень 2", callback_data="quiz_medium")])
+    
+    if level3_completed == 1:
+        buttons.append([InlineKeyboardButton("3️⃣ Уровень 3 ✅ (пройден)", callback_data="quiz_already_completed")])
+    else:
+        buttons.append([InlineKeyboardButton("3️⃣ Уровень 3", callback_data="quiz_hard")])
     
     buttons.append([InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")])
     
@@ -674,7 +674,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_main_keyboard()
         )
 
-# ========== АДМИН-КОМАНДА ==========
+# ========== АДМИН-КОМАНДЫ ==========
 async def add_coins(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     ADMIN_ID = 2120093748
@@ -698,54 +698,6 @@ async def add_coins(update: Update, context: ContextTypes.DEFAULT_TYPE):
     update_balance(user_id, new_balance)
     await update.message.reply_text(f"✅ Добавлено {amount} монет!\n💰 Новый баланс: {new_balance:.2f} coins")
 
-    async def show_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает содержимое БД (только для админа)"""
-    user_id = update.effective_user.id
-    ADMIN_ID = 2120093748  # твой ID
-    
-    if user_id != ADMIN_ID:
-        await update.message.reply_text("❌ У вас нет прав!")
-        return
-    
-    conn = sqlite3.connect('bot_database.db')
-    cursor = conn.cursor()
-    
-    # Получаем всех пользователей
-    cursor.execute('SELECT user_id, username, balance, total_answers, correct_answers, level1_completed, level2_completed FROM users')
-    users = cursor.fetchall()
-    conn.close()
-    
-    if not users:
-        await update.message.reply_text("📭 База данных пуста")
-        return
-    
-    # Формируем сообщение
-    message = "📊 *База данных*\n\n"
-    for user in users:
-        user_id = user[0]
-        username = user[1] if user[1] else str(user_id)
-        balance = user[2]
-        total = user[3]
-        correct = user[4]
-        level1 = user[5]
-        level2 = user[6]
-        
-        # Процент правильных ответов
-        percent = (correct / total * 100) if total > 0 else 0
-        
-        message += f"👤 *{username}*\n"
-        message += f"   💰 Баланс: {balance:.2f} coins\n"
-        message += f"   📊 Викторина: {correct}/{total} ({percent:.1f}%)\n"
-        message += f"   🏆 Уровни: 1️⃣ {'✅' if level1 else '❌'} | 2️⃣ {'✅' if level2 else '❌'}\n\n"
-    
-    # Отправляем сообщение
-    if len(message) > 4000:
-        # Если длинное, отправляем частями
-        for i in range(0, len(message), 4000):
-            await update.message.reply_text(message[i:i+4000], parse_mode="Markdown")
-    else:
-        await update.message.reply_text(message, parse_mode="Markdown")
-
 # ========== ЗАПУСК ==========
 def main():
     print("🚀 Запуск бота...")
@@ -759,12 +711,11 @@ def main():
     
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("addcoins", add_coins))
-    application.add_handler(CommandHandler("showdb", show_db))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(CallbackQueryHandler(handle_click, pattern="click"))
     application.add_handler(CallbackQueryHandler(show_inventory, pattern="^inventory$"))
     application.add_handler(CallbackQueryHandler(suggestions_menu, pattern="^suggestions$"))
-    application.add_handler(CallbackQueryHandler(start_quiz, pattern="^quiz_(easy|medium)$"))
+    application.add_handler(CallbackQueryHandler(start_quiz, pattern="^quiz_(easy|medium|hard)$"))
     application.add_handler(CallbackQueryHandler(handle_quiz_answer, pattern="^quiz_answer_"))
     application.add_handler(CallbackQueryHandler(show_case_info, pattern="^show_"))
     application.add_handler(CallbackQueryHandler(handle_case, pattern="^open_"))
@@ -773,7 +724,6 @@ def main():
     application.add_handler(CallbackQueryHandler(handle_back_to_menu, pattern="^back_to_menu$"))
     application.add_handler(CallbackQueryHandler(handle_quiz_coming_soon, pattern="^quiz_coming_soon$"))
     application.add_handler(CallbackQueryHandler(handle_quiz_already_completed, pattern="^quiz_already_completed$"))
-    
     
     print("🤖 Бот запущен! Напиши /start в Telegram")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
