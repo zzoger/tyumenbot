@@ -698,6 +698,54 @@ async def add_coins(update: Update, context: ContextTypes.DEFAULT_TYPE):
     update_balance(user_id, new_balance)
     await update.message.reply_text(f"✅ Добавлено {amount} монет!\n💰 Новый баланс: {new_balance:.2f} coins")
 
+    async def show_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает содержимое БД (только для админа)"""
+    user_id = update.effective_user.id
+    ADMIN_ID = 2120093748  # твой ID
+    
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("❌ У вас нет прав!")
+        return
+    
+    conn = sqlite3.connect('bot_database.db')
+    cursor = conn.cursor()
+    
+    # Получаем всех пользователей
+    cursor.execute('SELECT user_id, username, balance, total_answers, correct_answers, level1_completed, level2_completed FROM users')
+    users = cursor.fetchall()
+    conn.close()
+    
+    if not users:
+        await update.message.reply_text("📭 База данных пуста")
+        return
+    
+    # Формируем сообщение
+    message = "📊 *База данных*\n\n"
+    for user in users:
+        user_id = user[0]
+        username = user[1] if user[1] else str(user_id)
+        balance = user[2]
+        total = user[3]
+        correct = user[4]
+        level1 = user[5]
+        level2 = user[6]
+        
+        # Процент правильных ответов
+        percent = (correct / total * 100) if total > 0 else 0
+        
+        message += f"👤 *{username}*\n"
+        message += f"   💰 Баланс: {balance:.2f} coins\n"
+        message += f"   📊 Викторина: {correct}/{total} ({percent:.1f}%)\n"
+        message += f"   🏆 Уровни: 1️⃣ {'✅' if level1 else '❌'} | 2️⃣ {'✅' if level2 else '❌'}\n\n"
+    
+    # Отправляем сообщение
+    if len(message) > 4000:
+        # Если длинное, отправляем частями
+        for i in range(0, len(message), 4000):
+            await update.message.reply_text(message[i:i+4000], parse_mode="Markdown")
+    else:
+        await update.message.reply_text(message, parse_mode="Markdown")
+
 # ========== ЗАПУСК ==========
 def main():
     print("🚀 Запуск бота...")
@@ -711,6 +759,7 @@ def main():
     
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("addcoins", add_coins))
+    application.add_handler(CommandHandler("showdb", show_db))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(CallbackQueryHandler(handle_click, pattern="click"))
     application.add_handler(CallbackQueryHandler(show_inventory, pattern="^inventory$"))
@@ -724,6 +773,7 @@ def main():
     application.add_handler(CallbackQueryHandler(handle_back_to_menu, pattern="^back_to_menu$"))
     application.add_handler(CallbackQueryHandler(handle_quiz_coming_soon, pattern="^quiz_coming_soon$"))
     application.add_handler(CallbackQueryHandler(handle_quiz_already_completed, pattern="^quiz_already_completed$"))
+    
     
     print("🤖 Бот запущен! Напиши /start в Telegram")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
