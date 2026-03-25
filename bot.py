@@ -14,8 +14,10 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-# 👇 ВСТАВЬ СВОЙ ТОКЕН
-BOT_TOKEN = "8540702200:AAGdZHOYKpGou6scFplB7BwH8hHQ_63uYYc"
+BOT_TOKEN = os.environ.get('BOT_TOKEN')
+
+if not BOT_TOKEN:
+    raise ValueError("❌ BOT_TOKEN не найден!")
 
 request = HTTPXRequest()
 
