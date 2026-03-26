@@ -269,13 +269,20 @@ def set_last_bonus(user_id, timestamp):
     conn.close()
 
 def get_inventory(user_id):
+    """Получает инвентарь пользователя с отладкой"""
     conn = sqlite3.connect('bot_database.db')
     cursor = conn.cursor()
     cursor.execute('SELECT inventory FROM users WHERE user_id = ?', (user_id,))
     result = cursor.fetchone()
     conn.close()
+    
+    print(f"🔍 get_inventory для {user_id}: result = {result}")
+    
     if result and result[0]:
-        return json.loads(result[0])
+        try:
+            return json.loads(result[0])
+        except:
+            return {}
     return {}
 
 def update_inventory(user_id, item_name):
@@ -417,14 +424,32 @@ async def get_bonus(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ========== ИНВЕНТАРЬ ==========
 async def show_inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает инвентарь пользователя (с повторной попыткой)"""
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
-    inventory = get_inventory(user_id)
+    
+    # Пробуем получить инвентарь до 3 раз
+    inventory = {}
+    for attempt in range(3):
+        try:
+            inventory = get_inventory(user_id)
+            print(f"📦 Попытка {attempt + 1}: инвентарь = {inventory}")
+            
+            if inventory:
+                break
+            elif attempt < 2:
+                # Если пусто, ждём 0.5 секунды и пробуем снова
+                await asyncio.sleep(0.5)
+        except Exception as e:
+            print(f"❌ Ошибка при получении инвентаря: {e}")
+            if attempt < 2:
+                await asyncio.sleep(0.5)
     
     if not inventory:
         await query.message.reply_text(
-            "🧰 *Ваш инвентарь пуст*\n\nОткрывайте кейсы, чтобы получить футболистов!",
+            "🧰 *Ваш инвентарь пуст*\n\nОткрывайте кейсы, чтобы получить футболистов!\n\n"
+            "⚠️ Если инвентарь не пуст, попробуйте нажать кнопку ещё раз.",
             parse_mode="Markdown"
         )
         return
