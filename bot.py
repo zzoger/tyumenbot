@@ -77,6 +77,30 @@ def get_player_image_path(player_name):
     }
     return images.get(player_name)
 
+# ========== УНИВЕРСАЛЬНАЯ ФУНКЦИЯ С ПОВТОРНЫМИ ПОПЫТКАМИ ==========
+def execute_with_retry(func, *args, max_retries=3, delay=0.5):
+    """Универсальная функция с повторными попытками для любых операций с БД"""
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            result = func(*args)
+            if result is not None:
+                print(f"✅ Успешно выполнен запрос после {attempt + 1} попытки")
+                return result
+            elif attempt < max_retries - 1:
+                print(f"⚠️ Пустой результат, повтор {attempt + 1}/{max_retries}")
+                time.sleep(delay)
+            else:
+                return None
+        except Exception as e:
+            last_error = e
+            print(f"❌ Ошибка (попытка {attempt + 1}): {e}")
+            if attempt < max_retries - 1:
+                time.sleep(delay)
+    if last_error:
+        raise last_error
+    return None
+
 # ========== РАБОТА С БАЗОЙ ДАННЫХ ==========
 
 def init_database():
@@ -162,14 +186,12 @@ def migrate_database():
     conn = sqlite3.connect('bot_database.db')
     cursor = conn.cursor()
     
-    # Проверяем и добавляем колонку level3_completed
     try:
         cursor.execute('ALTER TABLE users ADD COLUMN level3_completed INTEGER DEFAULT 0')
         print("✅ Добавлена колонка level3_completed")
     except sqlite3.OperationalError:
         print("ℹ️ Колонка level3_completed уже существует")
     
-    # Проверяем и добавляем колонку last_bonus
     try:
         cursor.execute('ALTER TABLE users ADD COLUMN last_bonus INTEGER DEFAULT 0')
         print("✅ Добавлена колонка last_bonus")
@@ -180,128 +202,222 @@ def migrate_database():
     conn.close()
 
 def get_balance(user_id):
-    conn = sqlite3.connect('bot_database.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT balance FROM users WHERE user_id = ?', (user_id,))
-    result = cursor.fetchone()
-    conn.close()
-    return result[0] if result else 0.0
+    def _query():
+        conn = sqlite3.connect('bot_database.db')
+        try:
+            cursor = conn.cursor()
+            cursor.execute('SELECT balance FROM users WHERE user_id = ?', (user_id,))
+            result = cursor.fetchone()
+            return result[0] if result else 0.0
+        finally:
+            conn.close()
+    
+    try:
+        return execute_with_retry(_query)
+    except Exception as e:
+        print(f"❌ Не удалось получить баланс для {user_id}: {e}")
+        return 0.0
 
 def update_balance(user_id, new_balance):
-    conn = sqlite3.connect('bot_database.db')
-    cursor = conn.cursor()
-    cursor.execute('UPDATE users SET balance = ? WHERE user_id = ?', (new_balance, user_id))
-    conn.commit()
-    conn.close()
+    def _query():
+        conn = sqlite3.connect('bot_database.db')
+        try:
+            cursor = conn.cursor()
+            cursor.execute('UPDATE users SET balance = ? WHERE user_id = ?', (new_balance, user_id))
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+    
+    try:
+        return execute_with_retry(_query)
+    except Exception as e:
+        print(f"❌ Не удалось обновить баланс для {user_id}: {e}")
+        return False
 
 def add_user(user_id, username, first_name):
-    conn = sqlite3.connect('bot_database.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT user_id FROM users WHERE user_id = ?', (user_id,))
-    exists = cursor.fetchone()
-    if not exists:
-        cursor.execute('INSERT INTO users (user_id, username, first_name, balance, total_answers, correct_answers, level1_completed, level2_completed, level3_completed, last_bonus, inventory) VALUES (?, ?, ?, 0, 0, 0, 0, 0, 0, 0, ?)', 
-                      (user_id, username, first_name, json.dumps({})))
-        conn.commit()
-        print(f"✅ Новый пользователь добавлен: {user_id}")
-    else:
-        cursor.execute('UPDATE users SET username = ?, first_name = ? WHERE user_id = ?', 
-                      (username, first_name, user_id))
-        conn.commit()
-    conn.close()
+    def _query():
+        conn = sqlite3.connect('bot_database.db')
+        try:
+            cursor = conn.cursor()
+            cursor.execute('SELECT user_id FROM users WHERE user_id = ?', (user_id,))
+            exists = cursor.fetchone()
+            if not exists:
+                cursor.execute('INSERT INTO users (user_id, username, first_name, balance, total_answers, correct_answers, level1_completed, level2_completed, level3_completed, last_bonus, inventory) VALUES (?, ?, ?, 0, 0, 0, 0, 0, 0, 0, ?)', 
+                              (user_id, username, first_name, json.dumps({})))
+                print(f"✅ Новый пользователь добавлен: {user_id}")
+            else:
+                cursor.execute('UPDATE users SET username = ?, first_name = ? WHERE user_id = ?', 
+                              (username, first_name, user_id))
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+    
+    try:
+        return execute_with_retry(_query)
+    except Exception as e:
+        print(f"❌ Не удалось добавить пользователя {user_id}: {e}")
+        return False
 
 def update_quiz_stats(user_id, is_correct):
-    conn = sqlite3.connect('bot_database.db')
-    cursor = conn.cursor()
-    cursor.execute('UPDATE users SET total_answers = total_answers + 1 WHERE user_id = ?', (user_id,))
-    if is_correct:
-        cursor.execute('UPDATE users SET correct_answers = correct_answers + 1 WHERE user_id = ?', (user_id,))
-    conn.commit()
-    conn.close()
+    def _query():
+        conn = sqlite3.connect('bot_database.db')
+        try:
+            cursor = conn.cursor()
+            cursor.execute('UPDATE users SET total_answers = total_answers + 1 WHERE user_id = ?', (user_id,))
+            if is_correct:
+                cursor.execute('UPDATE users SET correct_answers = correct_answers + 1 WHERE user_id = ?', (user_id,))
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+    
+    try:
+        return execute_with_retry(_query)
+    except Exception as e:
+        print(f"❌ Не удалось обновить статистику для {user_id}: {e}")
+        return False
 
 def get_quiz_stats(user_id):
-    conn = sqlite3.connect('bot_database.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT total_answers, correct_answers FROM users WHERE user_id = ?', (user_id,))
-    result = cursor.fetchone()
-    conn.close()
-    return result if result else (0, 0)
+    def _query():
+        conn = sqlite3.connect('bot_database.db')
+        try:
+            cursor = conn.cursor()
+            cursor.execute('SELECT total_answers, correct_answers FROM users WHERE user_id = ?', (user_id,))
+            result = cursor.fetchone()
+            return result if result else (0, 0)
+        finally:
+            conn.close()
+    
+    try:
+        return execute_with_retry(_query)
+    except Exception as e:
+        print(f"❌ Не удалось получить статистику для {user_id}: {e}")
+        return (0, 0)
 
 def get_level_completed(user_id, level):
-    """Получает статус прохождения уровня с отладкой"""
-    try:
+    def _query():
         conn = sqlite3.connect('bot_database.db')
-        cursor = conn.cursor()
-        if level == 1:
-            cursor.execute('SELECT level1_completed FROM users WHERE user_id = ?', (user_id,))
-        elif level == 2:
-            cursor.execute('SELECT level2_completed FROM users WHERE user_id = ?', (user_id,))
-        else:
-            cursor.execute('SELECT level3_completed FROM users WHERE user_id = ?', (user_id,))
-        result = cursor.fetchone()
-        conn.close()
-        return result[0] if result else 0
+        try:
+            cursor = conn.cursor()
+            if level == 1:
+                cursor.execute('SELECT level1_completed FROM users WHERE user_id = ?', (user_id,))
+            elif level == 2:
+                cursor.execute('SELECT level2_completed FROM users WHERE user_id = ?', (user_id,))
+            else:
+                cursor.execute('SELECT level3_completed FROM users WHERE user_id = ?', (user_id,))
+            result = cursor.fetchone()
+            return result[0] if result else 0
+        finally:
+            conn.close()
+    
+    try:
+        return execute_with_retry(_query)
     except Exception as e:
-        print(f"❌ Ошибка в get_level_completed: {e}")
+        print(f"❌ Не удалось получить уровень {level} для {user_id}: {e}")
         return 0
 
 def set_level_completed(user_id, level):
-    conn = sqlite3.connect('bot_database.db')
-    cursor = conn.cursor()
-    if level == 1:
-        cursor.execute('UPDATE users SET level1_completed = 1 WHERE user_id = ?', (user_id,))
-    elif level == 2:
-        cursor.execute('UPDATE users SET level2_completed = 1 WHERE user_id = ?', (user_id,))
-    else:
-        cursor.execute('UPDATE users SET level3_completed = 1 WHERE user_id = ?', (user_id,))
-    conn.commit()
-    conn.close()
-    print(f"✅ Уровень {level} отмечен как пройденный для {user_id}")
+    def _query():
+        conn = sqlite3.connect('bot_database.db')
+        try:
+            cursor = conn.cursor()
+            if level == 1:
+                cursor.execute('UPDATE users SET level1_completed = 1 WHERE user_id = ?', (user_id,))
+            elif level == 2:
+                cursor.execute('UPDATE users SET level2_completed = 1 WHERE user_id = ?', (user_id,))
+            else:
+                cursor.execute('UPDATE users SET level3_completed = 1 WHERE user_id = ?', (user_id,))
+            conn.commit()
+            print(f"✅ Уровень {level} отмечен как пройденный для {user_id}")
+            return True
+        finally:
+            conn.close()
+    
+    try:
+        return execute_with_retry(_query)
+    except Exception as e:
+        print(f"❌ Не удалось отметить уровень {level} для {user_id}: {e}")
+        return False
 
 def get_last_bonus(user_id):
-    conn = sqlite3.connect('bot_database.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT last_bonus FROM users WHERE user_id = ?', (user_id,))
-    result = cursor.fetchone()
-    conn.close()
-    return result[0] if result else 0
+    def _query():
+        conn = sqlite3.connect('bot_database.db')
+        try:
+            cursor = conn.cursor()
+            cursor.execute('SELECT last_bonus FROM users WHERE user_id = ?', (user_id,))
+            result = cursor.fetchone()
+            return result[0] if result else 0
+        finally:
+            conn.close()
+    
+    try:
+        return execute_with_retry(_query)
+    except Exception as e:
+        print(f"❌ Не удалось получить last_bonus для {user_id}: {e}")
+        return 0
 
 def set_last_bonus(user_id, timestamp):
-    conn = sqlite3.connect('bot_database.db')
-    cursor = conn.cursor()
-    cursor.execute('UPDATE users SET last_bonus = ? WHERE user_id = ?', (timestamp, user_id))
-    conn.commit()
-    conn.close()
+    def _query():
+        conn = sqlite3.connect('bot_database.db')
+        try:
+            cursor = conn.cursor()
+            cursor.execute('UPDATE users SET last_bonus = ? WHERE user_id = ?', (timestamp, user_id))
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+    
+    try:
+        return execute_with_retry(_query)
+    except Exception as e:
+        print(f"❌ Не удалось установить last_bonus для {user_id}: {e}")
+        return False
 
 def get_inventory(user_id):
-    """Получает инвентарь пользователя с отладкой"""
-    conn = sqlite3.connect('bot_database.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT inventory FROM users WHERE user_id = ?', (user_id,))
-    result = cursor.fetchone()
-    conn.close()
-    
-    print(f"🔍 get_inventory для {user_id}: result = {result}")
-    
-    if result and result[0]:
+    def _query():
+        conn = sqlite3.connect('bot_database.db')
         try:
-            return json.loads(result[0])
-        except:
+            cursor = conn.cursor()
+            cursor.execute('SELECT inventory FROM users WHERE user_id = ?', (user_id,))
+            result = cursor.fetchone()
+            if result and result[0]:
+                return json.loads(result[0])
             return {}
-    return {}
+        finally:
+            conn.close()
+    
+    try:
+        inventory = execute_with_retry(_query)
+        print(f"🔍 get_inventory для {user_id}: {inventory}")
+        return inventory if inventory is not None else {}
+    except Exception as e:
+        print(f"❌ Не удалось получить инвентарь для {user_id}: {e}")
+        return {}
 
 def update_inventory(user_id, item_name):
-    inventory = get_inventory(user_id)
-    if item_name in inventory:
-        inventory[item_name] += 1
-    else:
-        inventory[item_name] = 1
-    conn = sqlite3.connect('bot_database.db')
-    cursor = conn.cursor()
-    cursor.execute('UPDATE users SET inventory = ? WHERE user_id = ?', (json.dumps(inventory), user_id))
-    conn.commit()
-    conn.close()
-    print(f"✅ Добавлен {item_name} в инвентарь {user_id}")
+    def _query():
+        conn = sqlite3.connect('bot_database.db')
+        try:
+            cursor = conn.cursor()
+            inventory = get_inventory(user_id)
+            if item_name in inventory:
+                inventory[item_name] += 1
+            else:
+                inventory[item_name] = 1
+            cursor.execute('UPDATE users SET inventory = ? WHERE user_id = ?', (json.dumps(inventory), user_id))
+            conn.commit()
+            print(f"✅ Добавлен {item_name} в инвентарь {user_id}")
+            return True
+        finally:
+            conn.close()
+    
+    try:
+        return execute_with_retry(_query)
+    except Exception as e:
+        print(f"❌ Не удалось обновить инвентарь для {user_id}: {e}")
+        return False
 
 def get_random_item(case_type):
     items = CASE_ITEMS[case_type]
@@ -385,24 +501,19 @@ async def handle_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ========== БОНУС ==========
 async def get_bonus(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Выдаёт ежечасный бонус"""
     print("🔍 Функция get_bonus вызвана!")
     query = update.callback_query
     await query.answer()
-    print("✅ Callback обработан")
     
     user_id = query.from_user.id
     current_time = int(time.time())
-    print(f"👤 Пользователь: {user_id}, время: {current_time}")
     
     last_bonus = get_last_bonus(user_id)
-    print(f"📅 Последний бонус: {last_bonus}")
     
     if current_time - last_bonus < 3600:
         remaining = 3600 - (current_time - last_bonus)
         minutes = remaining // 60
         seconds = remaining % 60
-        print(f"⏰ Бонус ещё не доступен, осталось {minutes} мин")
         await query.message.reply_text(
             f"⏰ *Бонус уже получен!*\n\n"
             f"Следующий бонус будет доступен через {minutes} мин {seconds} сек.\n"
@@ -411,13 +522,10 @@ async def get_bonus(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    print("💰 Выдаём бонус...")
     current_balance = get_balance(user_id)
     new_balance = current_balance + 0.5
     update_balance(user_id, new_balance)
     set_last_bonus(user_id, current_time)
-    
-    print(f"✅ Бонус выдан! Новый баланс: {new_balance}")
     
     await query.message.reply_text(
         f"🎁 *Бонус получен!*\n\n"
@@ -429,31 +537,15 @@ async def get_bonus(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ========== ИНВЕНТАРЬ ==========
 async def show_inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает инвентарь пользователя (с повторной попыткой)"""
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
     
-    # Пробуем получить инвентарь до 3 раз
-    inventory = {}
-    for attempt in range(3):
-        try:
-            inventory = get_inventory(user_id)
-            print(f"📦 Попытка {attempt + 1}: инвентарь = {inventory}")
-            
-            if inventory:
-                break
-            elif attempt < 2:
-                await asyncio.sleep(0.5)
-        except Exception as e:
-            print(f"❌ Ошибка при получении инвентаря: {e}")
-            if attempt < 2:
-                await asyncio.sleep(0.5)
+    inventory = get_inventory(user_id)
     
     if not inventory:
         await query.message.reply_text(
-            "🧰 *Ваш инвентарь пуст*\n\nОткрывайте кейсы, чтобы получить футболистов!\n\n"
-            "⚠️ Если инвентарь не пуст, попробуйте нажать кнопку ещё раз.",
+            "🧰 *Ваш инвентарь пуст*\n\nОткрывайте кейсы, чтобы получить футболистов!",
             parse_mode="Markdown"
         )
         return
@@ -598,28 +690,13 @@ async def handle_case(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ========== ВИКТОРИНА ==========
 async def quiz_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает меню выбора уровня викторины (с повторной попыткой)"""
     user_id = update.effective_user.id
     
-    # Пробуем получить статусы уровней до 3 раз
-    level1 = 0
-    level2 = 0
-    level3 = 0
+    level1 = get_level_completed(user_id, 1)
+    level2 = get_level_completed(user_id, 2)
+    level3 = get_level_completed(user_id, 3)
     
-    for attempt in range(3):
-        try:
-            level1 = get_level_completed(user_id, 1)
-            level2 = get_level_completed(user_id, 2)
-            level3 = get_level_completed(user_id, 3)
-            
-            print(f"📊 Попытка {attempt + 1}: Уровни = 1:{level1}, 2:{level2}, 3:{level3}")
-            
-            # Если данные получены, выходим
-            break
-        except Exception as e:
-            print(f"❌ Ошибка при получении уровней: {e}")
-            if attempt < 2:
-                await asyncio.sleep(0.5)
+    print(f"📊 quiz_menu: 1:{level1}, 2:{level2}, 3:{level3}")
     
     buttons = []
     
@@ -796,22 +873,11 @@ async def handle_back_to_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE
     await query.answer()
     user_id = query.from_user.id
     
-    # Пробуем получить статусы уровней до 3 раз
-    level1 = 0
-    level2 = 0
-    level3 = 0
+    level1 = get_level_completed(user_id, 1)
+    level2 = get_level_completed(user_id, 2)
+    level3 = get_level_completed(user_id, 3)
     
-    for attempt in range(3):
-        try:
-            level1 = get_level_completed(user_id, 1)
-            level2 = get_level_completed(user_id, 2)
-            level3 = get_level_completed(user_id, 3)
-            print(f"📊 handle_back_to_quiz: 1:{level1}, 2:{level2}, 3:{level3}")
-            break
-        except Exception as e:
-            print(f"❌ Ошибка: {e}")
-            if attempt < 2:
-                await asyncio.sleep(0.5)
+    print(f"📊 handle_back_to_quiz: 1:{level1}, 2:{level2}, 3:{level3}")
     
     buttons = []
     
@@ -904,12 +970,8 @@ def main():
     print("🚀 Запуск бота...")
     init_database()
     
-    # Сохраняем инвентарь перед миграцией
     backup_inventory()
-    
     migrate_database()
-    
-    # Восстанавливаем инвентарь после миграции
     restore_inventory()
     
     if not os.path.exists("images"):
