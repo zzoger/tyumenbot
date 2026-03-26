@@ -101,6 +101,62 @@ def init_database():
     conn.close()
     print("✅ База данных инициализирована")
 
+def backup_inventory():
+    """Создаёт резервную копию инвентаря перед обновлением"""
+    try:
+        conn = sqlite3.connect('bot_database.db')
+        cursor = conn.cursor()
+        
+        cursor.execute("PRAGMA table_info(users)")
+        columns = [col[1] for col in cursor.fetchall()]
+        
+        if 'inventory' not in columns:
+            print("⚠️ Колонка inventory не найдена, пропускаем бэкап")
+            conn.close()
+            return
+        
+        cursor.execute('DROP TABLE IF EXISTS users_backup')
+        cursor.execute('''
+            CREATE TABLE users_backup AS 
+            SELECT user_id, inventory FROM users
+        ''')
+        conn.commit()
+        conn.close()
+        print("✅ Бэкап инвентаря создан")
+    except Exception as e:
+        print(f"❌ Ошибка бэкапа: {e}")
+
+def restore_inventory():
+    """Восстанавливает инвентарь из резервной копии"""
+    try:
+        conn = sqlite3.connect('bot_database.db')
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users_backup'")
+        if not cursor.fetchone():
+            print("ℹ️ Бэкап инвентаря не найден")
+            conn.close()
+            return
+        
+        cursor.execute('''
+            UPDATE users 
+            SET inventory = (
+                SELECT inventory FROM users_backup 
+                WHERE users_backup.user_id = users.user_id
+            )
+            WHERE EXISTS (
+                SELECT 1 FROM users_backup 
+                WHERE users_backup.user_id = users.user_id
+            )
+        ''')
+        conn.commit()
+        
+        cursor.execute('DROP TABLE users_backup')
+        conn.close()
+        print("✅ Инвентарь восстановлен из бэкапа")
+    except Exception as e:
+        print(f"❌ Ошибка восстановления: {e}")
+
 def migrate_database():
     """Добавляет недостающие колонки в базу данных"""
     conn = sqlite3.connect('bot_database.db')
@@ -786,7 +842,14 @@ async def add_coins(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     print("🚀 Запуск бота...")
     init_database()
+    
+    # Сохраняем инвентарь перед миграцией
+    backup_inventory()
+    
     migrate_database()
+    
+    # Восстанавливаем инвентарь после миграции
+    restore_inventory()
     
     if not os.path.exists("images"):
         os.makedirs("images")
