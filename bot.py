@@ -249,7 +249,9 @@ async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         quiz_stats = "0/0 (0%)"
     
+    # 👇 НОВАЯ КЛАВИАТУРА С БОНУСОМ
     keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("⏰ Бонус (+0.5/час)", callback_data="bonus")],
         [InlineKeyboardButton("🧰 Инвентарь", callback_data="inventory")],
         [InlineKeyboardButton("‼️ Предложения", callback_data="suggestions")]
     ])
@@ -312,6 +314,51 @@ async def show_inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await query.message.reply_text(
         f"🧰 *Ваш инвентарь*\n\n📦 Всего предметов: {total_items}\n\n{items_list}",
+        parse_mode="Markdown"
+    )
+
+    # ========== БОНУС ==========
+async def get_bonus(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Выдаёт ежечасный бонус"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    current_time = int(asyncio.get_event_loop().time())
+    
+    conn = sqlite3.connect('bot_database.db')
+    cursor = conn.cursor()
+    
+    cursor.execute('SELECT last_bonus FROM users WHERE user_id = ?', (user_id,))
+    result = cursor.fetchone()
+    last_bonus = result[0] if result else 0
+    
+    if current_time - last_bonus < 3600:
+        remaining = 3600 - (current_time - last_bonus)
+        minutes = remaining // 60
+        seconds = remaining % 60
+        await query.message.reply_text(
+            f"⏰ *Бонус уже получен!*\n\n"
+            f"Следующий бонус будет доступен через {minutes} мин {seconds} сек.\n"
+            f"💰 +0.5 coins каждый час!",
+            parse_mode="Markdown"
+        )
+        conn.close()
+        return
+    
+    current_balance = get_balance(user_id)
+    new_balance = current_balance + 0.5
+    update_balance(user_id, new_balance)
+    
+    cursor.execute('UPDATE users SET last_bonus = ? WHERE user_id = ?', (current_time, user_id))
+    conn.commit()
+    conn.close()
+    
+    await query.message.reply_text(
+        f"🎁 *Бонус получен!*\n\n"
+        f"💰 +0.5 coins\n"
+        f"💰 Новый баланс: {new_balance:.2f} coins\n\n"
+        f"⏰ Следующий бонус через 1 час!",
         parse_mode="Markdown"
     )
 
@@ -731,6 +778,7 @@ def main():
     application.add_handler(CallbackQueryHandler(handle_click, pattern="click"))
     application.add_handler(CallbackQueryHandler(show_inventory, pattern="^inventory$"))
     application.add_handler(CallbackQueryHandler(suggestions_menu, pattern="^suggestions$"))
+    application.add_handler(CallbackQueryHandler(get_bonus, pattern="^bonus$"))
     application.add_handler(CallbackQueryHandler(start_quiz, pattern="^quiz_(easy|medium|hard)$"))
     application.add_handler(CallbackQueryHandler(handle_quiz_answer, pattern="^quiz_answer_"))
     application.add_handler(CallbackQueryHandler(show_case_info, pattern="^show_"))
