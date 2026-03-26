@@ -228,17 +228,22 @@ def get_quiz_stats(user_id):
     return result if result else (0, 0)
 
 def get_level_completed(user_id, level):
-    conn = sqlite3.connect('bot_database.db')
-    cursor = conn.cursor()
-    if level == 1:
-        cursor.execute('SELECT level1_completed FROM users WHERE user_id = ?', (user_id,))
-    elif level == 2:
-        cursor.execute('SELECT level2_completed FROM users WHERE user_id = ?', (user_id,))
-    else:
-        cursor.execute('SELECT level3_completed FROM users WHERE user_id = ?', (user_id,))
-    result = cursor.fetchone()
-    conn.close()
-    return result[0] if result else 0
+    """Получает статус прохождения уровня с отладкой"""
+    try:
+        conn = sqlite3.connect('bot_database.db')
+        cursor = conn.cursor()
+        if level == 1:
+            cursor.execute('SELECT level1_completed FROM users WHERE user_id = ?', (user_id,))
+        elif level == 2:
+            cursor.execute('SELECT level2_completed FROM users WHERE user_id = ?', (user_id,))
+        else:
+            cursor.execute('SELECT level3_completed FROM users WHERE user_id = ?', (user_id,))
+        result = cursor.fetchone()
+        conn.close()
+        return result[0] if result else 0
+    except Exception as e:
+        print(f"❌ Ошибка в get_level_completed: {e}")
+        return 0
 
 def set_level_completed(user_id, level):
     conn = sqlite3.connect('bot_database.db')
@@ -439,7 +444,6 @@ async def show_inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if inventory:
                 break
             elif attempt < 2:
-                # Если пусто, ждём 0.5 секунды и пробуем снова
                 await asyncio.sleep(0.5)
         except Exception as e:
             print(f"❌ Ошибка при получении инвентаря: {e}")
@@ -594,24 +598,42 @@ async def handle_case(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ========== ВИКТОРИНА ==========
 async def quiz_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает меню выбора уровня викторины (с повторной попыткой)"""
     user_id = update.effective_user.id
-    level1_completed = get_level_completed(user_id, 1)
-    level2_completed = get_level_completed(user_id, 2)
-    level3_completed = get_level_completed(user_id, 3)
+    
+    # Пробуем получить статусы уровней до 3 раз
+    level1 = 0
+    level2 = 0
+    level3 = 0
+    
+    for attempt in range(3):
+        try:
+            level1 = get_level_completed(user_id, 1)
+            level2 = get_level_completed(user_id, 2)
+            level3 = get_level_completed(user_id, 3)
+            
+            print(f"📊 Попытка {attempt + 1}: Уровни = 1:{level1}, 2:{level2}, 3:{level3}")
+            
+            # Если данные получены, выходим
+            break
+        except Exception as e:
+            print(f"❌ Ошибка при получении уровней: {e}")
+            if attempt < 2:
+                await asyncio.sleep(0.5)
     
     buttons = []
     
-    if level1_completed == 1:
+    if level1 == 1:
         buttons.append([InlineKeyboardButton("1️⃣ Уровень 1 ✅ (пройден)", callback_data="quiz_already_completed")])
     else:
         buttons.append([InlineKeyboardButton("1️⃣ Уровень 1", callback_data="quiz_easy")])
     
-    if level2_completed == 1:
+    if level2 == 1:
         buttons.append([InlineKeyboardButton("2️⃣ Уровень 2 ✅ (пройден)", callback_data="quiz_already_completed")])
     else:
         buttons.append([InlineKeyboardButton("2️⃣ Уровень 2", callback_data="quiz_medium")])
     
-    if level3_completed == 1:
+    if level3 == 1:
         buttons.append([InlineKeyboardButton("3️⃣ Уровень 3 ✅ (пройден)", callback_data="quiz_already_completed")])
     else:
         buttons.append([InlineKeyboardButton("3️⃣ Уровень 3", callback_data="quiz_hard")])
@@ -773,23 +795,37 @@ async def handle_back_to_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
-    level1_completed = get_level_completed(user_id, 1)
-    level2_completed = get_level_completed(user_id, 2)
-    level3_completed = get_level_completed(user_id, 3)
+    
+    # Пробуем получить статусы уровней до 3 раз
+    level1 = 0
+    level2 = 0
+    level3 = 0
+    
+    for attempt in range(3):
+        try:
+            level1 = get_level_completed(user_id, 1)
+            level2 = get_level_completed(user_id, 2)
+            level3 = get_level_completed(user_id, 3)
+            print(f"📊 handle_back_to_quiz: 1:{level1}, 2:{level2}, 3:{level3}")
+            break
+        except Exception as e:
+            print(f"❌ Ошибка: {e}")
+            if attempt < 2:
+                await asyncio.sleep(0.5)
     
     buttons = []
     
-    if level1_completed == 1:
+    if level1 == 1:
         buttons.append([InlineKeyboardButton("1️⃣ Уровень 1 ✅ (пройден)", callback_data="quiz_already_completed")])
     else:
         buttons.append([InlineKeyboardButton("1️⃣ Уровень 1", callback_data="quiz_easy")])
     
-    if level2_completed == 1:
+    if level2 == 1:
         buttons.append([InlineKeyboardButton("2️⃣ Уровень 2 ✅ (пройден)", callback_data="quiz_already_completed")])
     else:
         buttons.append([InlineKeyboardButton("2️⃣ Уровень 2", callback_data="quiz_medium")])
     
-    if level3_completed == 1:
+    if level3 == 1:
         buttons.append([InlineKeyboardButton("3️⃣ Уровень 3 ✅ (пройден)", callback_data="quiz_already_completed")])
     else:
         buttons.append([InlineKeyboardButton("3️⃣ Уровень 3", callback_data="quiz_hard")])
