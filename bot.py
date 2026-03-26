@@ -4,6 +4,7 @@ import random
 import os
 import asyncio
 import json
+import time
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from telegram.request import HTTPXRequest
@@ -92,6 +93,7 @@ def init_database():
             level1_completed INTEGER DEFAULT 0,
             level2_completed INTEGER DEFAULT 0,
             level3_completed INTEGER DEFAULT 0,
+            last_bonus INTEGER DEFAULT 0,
             inventory TEXT DEFAULT '{}'
         )
     ''')
@@ -110,6 +112,13 @@ def migrate_database():
         print("✅ Добавлена колонка level3_completed")
     except sqlite3.OperationalError:
         print("ℹ️ Колонка level3_completed уже существует")
+    
+    # Проверяем и добавляем колонку last_bonus
+    try:
+        cursor.execute('ALTER TABLE users ADD COLUMN last_bonus INTEGER DEFAULT 0')
+        print("✅ Добавлена колонка last_bonus")
+    except sqlite3.OperationalError:
+        print("ℹ️ Колонка last_bonus уже существует")
     
     conn.commit()
     conn.close()
@@ -135,7 +144,7 @@ def add_user(user_id, username, first_name):
     cursor.execute('SELECT user_id FROM users WHERE user_id = ?', (user_id,))
     exists = cursor.fetchone()
     if not exists:
-        cursor.execute('INSERT INTO users (user_id, username, first_name, balance, total_answers, correct_answers, level1_completed, level2_completed, level3_completed, inventory) VALUES (?, ?, ?, 0, 0, 0, 0, 0, 0, ?)', 
+        cursor.execute('INSERT INTO users (user_id, username, first_name, balance, total_answers, correct_answers, level1_completed, level2_completed, level3_completed, last_bonus, inventory) VALUES (?, ?, ?, 0, 0, 0, 0, 0, 0, 0, ?)', 
                       (user_id, username, first_name, json.dumps({})))
         conn.commit()
         print(f"✅ Новый пользователь добавлен: {user_id}")
@@ -187,6 +196,21 @@ def set_level_completed(user_id, level):
     conn.commit()
     conn.close()
     print(f"✅ Уровень {level} отмечен как пройденный для {user_id}")
+
+def get_last_bonus(user_id):
+    conn = sqlite3.connect('bot_database.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT last_bonus FROM users WHERE user_id = ?', (user_id,))
+    result = cursor.fetchone()
+    conn.close()
+    return result[0] if result else 0
+
+def set_last_bonus(user_id, timestamp):
+    conn = sqlite3.connect('bot_database.db')
+    cursor = conn.cursor()
+    cursor.execute('UPDATE users SET last_bonus = ? WHERE user_id = ?', (timestamp, user_id))
+    conn.commit()
+    conn.close()
 
 def get_inventory(user_id):
     conn = sqlite3.connect('bot_database.db')
@@ -249,7 +273,6 @@ async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         quiz_stats = "0/0 (0%)"
     
-    # 👇 НОВАЯ КЛАВИАТУРА С БОНУСОМ
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("⏰ Бонус (+0.5/час)", callback_data="bonus")],
         [InlineKeyboardButton("🧰 Инвентарь", callback_data="inventory")],
@@ -292,6 +315,50 @@ async def handle_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         print(f"❌ Ошибка: {e}")
 
+# ========== БОНУС ==========
+async def get_bonus(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Выдаёт ежечасный бонус"""
+    print("🔍 Функция get_bonus вызвана!")
+    query = update.callback_query
+    await query.answer()
+    print("✅ Callback обработан")
+    
+    user_id = query.from_user.id
+    current_time = int(time.time())
+    print(f"👤 Пользователь: {user_id}, время: {current_time}")
+    
+    last_bonus = get_last_bonus(user_id)
+    print(f"📅 Последний бонус: {last_bonus}")
+    
+    if current_time - last_bonus < 3600:
+        remaining = 3600 - (current_time - last_bonus)
+        minutes = remaining // 60
+        seconds = remaining % 60
+        print(f"⏰ Бонус ещё не доступен, осталось {minutes} мин")
+        await query.message.reply_text(
+            f"⏰ *Бонус уже получен!*\n\n"
+            f"Следующий бонус будет доступен через {minutes} мин {seconds} сек.\n"
+            f"💰 +0.5 coins каждый час!",
+            parse_mode="Markdown"
+        )
+        return
+    
+    print("💰 Выдаём бонус...")
+    current_balance = get_balance(user_id)
+    new_balance = current_balance + 0.5
+    update_balance(user_id, new_balance)
+    set_last_bonus(user_id, current_time)
+    
+    print(f"✅ Бонус выдан! Новый баланс: {new_balance}")
+    
+    await query.message.reply_text(
+        f"🎁 *Бонус получен!*\n\n"
+        f"💰 +0.5 coins\n"
+        f"💰 Новый баланс: {new_balance:.2f} coins\n\n"
+        f"⏰ Следующий бонус через 1 час!",
+        parse_mode="Markdown"
+    )
+
 # ========== ИНВЕНТАРЬ ==========
 async def show_inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -314,51 +381,6 @@ async def show_inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await query.message.reply_text(
         f"🧰 *Ваш инвентарь*\n\n📦 Всего предметов: {total_items}\n\n{items_list}",
-        parse_mode="Markdown"
-    )
-
-    # ========== БОНУС ==========
-async def get_bonus(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Выдаёт ежечасный бонус"""
-    query = update.callback_query
-    await query.answer()
-    
-    user_id = query.from_user.id
-    current_time = int(asyncio.get_event_loop().time())
-    
-    conn = sqlite3.connect('bot_database.db')
-    cursor = conn.cursor()
-    
-    cursor.execute('SELECT last_bonus FROM users WHERE user_id = ?', (user_id,))
-    result = cursor.fetchone()
-    last_bonus = result[0] if result else 0
-    
-    if current_time - last_bonus < 3600:
-        remaining = 3600 - (current_time - last_bonus)
-        minutes = remaining // 60
-        seconds = remaining % 60
-        await query.message.reply_text(
-            f"⏰ *Бонус уже получен!*\n\n"
-            f"Следующий бонус будет доступен через {minutes} мин {seconds} сек.\n"
-            f"💰 +0.5 coins каждый час!",
-            parse_mode="Markdown"
-        )
-        conn.close()
-        return
-    
-    current_balance = get_balance(user_id)
-    new_balance = current_balance + 0.5
-    update_balance(user_id, new_balance)
-    
-    cursor.execute('UPDATE users SET last_bonus = ? WHERE user_id = ?', (current_time, user_id))
-    conn.commit()
-    conn.close()
-    
-    await query.message.reply_text(
-        f"🎁 *Бонус получен!*\n\n"
-        f"💰 +0.5 coins\n"
-        f"💰 Новый баланс: {new_balance:.2f} coins\n\n"
-        f"⏰ Следующий бонус через 1 час!",
         parse_mode="Markdown"
     )
 
@@ -764,7 +786,7 @@ async def add_coins(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     print("🚀 Запуск бота...")
     init_database()
-    migrate_database()  # 👈 ДОБАВЛЯЕМ МИГРАЦИЮ
+    migrate_database()
     
     if not os.path.exists("images"):
         os.makedirs("images")
@@ -776,9 +798,9 @@ def main():
     application.add_handler(CommandHandler("addcoins", add_coins))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(CallbackQueryHandler(handle_click, pattern="click"))
+    application.add_handler(CallbackQueryHandler(get_bonus, pattern="^bonus$"))
     application.add_handler(CallbackQueryHandler(show_inventory, pattern="^inventory$"))
     application.add_handler(CallbackQueryHandler(suggestions_menu, pattern="^suggestions$"))
-    application.add_handler(CallbackQueryHandler(get_bonus, pattern="^bonus$"))
     application.add_handler(CallbackQueryHandler(start_quiz, pattern="^quiz_(easy|medium|hard)$"))
     application.add_handler(CallbackQueryHandler(handle_quiz_answer, pattern="^quiz_answer_"))
     application.add_handler(CallbackQueryHandler(show_case_info, pattern="^show_"))
